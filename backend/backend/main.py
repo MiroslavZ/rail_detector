@@ -13,4 +13,4 @@ async def task_create() -> None:
 
 @app.on_event("shutdown")
 async def task_stop() -> None:
-    await app.state.export_runner.stop()
+    app.state.video_handler.stop()
