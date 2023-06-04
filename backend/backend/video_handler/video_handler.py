@@ -1,21 +1,19 @@
-from asyncio import create_task, Task
+import asyncio
+from asyncio import create_task
 import io
-import os
 from enum import Enum
 from pathlib import Path
-from typing import List, Union
-from tempfile import NamedTemporaryFile
+from typing import List
+
+import aiofiles
 from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import torch
-from typing.io import IO
 from ultralytics.nn.autoshape import Detections
 
 from backend.backend.config import YOLO_DEFAULT_SAVE_PATH, MODEL_PATH
 import cv2
-
-from fastapi import UploadFile
 
 
 class TaskStatus(Enum):
@@ -41,89 +39,85 @@ class VideoHandler:
             return self.store[file_hash].task_status
         return TaskStatus.NOT_RUNNING
 
-    def start(self, uploaded_file: UploadFile) -> int:
-        file_hash = hash(uploaded_file)
-        # это io или все таки вычислительная задача?
-        self.handle_file(uploaded_file)
-        return file_hash
+    def start(self, file_path: Path, file_hash: int):
+        # это io или вычислительная задача?
 
-    def handle_file(self, uploaded_file: UploadFile):
-        self.store[hash(uploaded_file)] = VideoHandleTask(TaskStatus.IN_PROGRESS)
+        create_task(self.handle_file(file_path, file_hash))
 
-        temporary_file = self.save_file(uploaded_file)
-        file_path = temporary_file.name
-        all_frames = self.cut_file(file_path)
-        temporary_file.close()
-        os.unlink(file_path)
-        all_frames_paths = [frame.name for frame in all_frames]
-        processed_frames_paths = self.get_predictions(all_frames_paths)
-        self.clear_files(all_frames)
-        result_file_path = self.create_tagged_video(processed_frames_paths, str(hash(uploaded_file)))
-        self.store[hash(uploaded_file)].task_status = TaskStatus.FINISH
-        self.store[hash(uploaded_file)].result_file_path = result_file_path
-        for frame in processed_frames_paths:
-            os.unlink(frame)
+    async def handle_file(self, file_path: Path, file_hash: int):
+        self.store[file_hash] = VideoHandleTask(TaskStatus.IN_PROGRESS)
+        all_frames_paths, width, height, fps = await self.cut_file(str(file_path.resolve()), file_hash)
+        loop = asyncio.get_running_loop()
+        processed_frames_paths = await loop.run_in_executor(None, self.get_predictions, all_frames_paths)
+        str_processed_frames_paths = [str(path.resolve()) for path in processed_frames_paths]
+        self.store[file_hash].result_file_path = \
+            await loop.run_in_executor(None, self.create_tagged_video, str_processed_frames_paths, width, height, fps, file_hash)
+        await loop.run_in_executor(None, self.clear_files, *[file_path, *all_frames_paths, *processed_frames_paths])
+        self.store[file_hash].task_status = TaskStatus.FINISH
 
-    def save_file(self, uploaded_file: UploadFile) -> Union[IO, IO[bytes]]:
-        file_fd = NamedTemporaryFile(dir='.', delete=False)
-        while data := uploaded_file.file.read(1024):
-            file_fd.write(data)
-        print(file_fd)
-        return file_fd
-
-    def cut_file(self, path: str) -> List[Union[IO, IO[bytes]]]:
-        cam = cv2.VideoCapture(path)
-        currentframe = 0
+    async def cut_file(self, path: str, file_hash: int) -> tuple[list[Path], int, int, int]:
+        cap = cv2.VideoCapture(path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        current_frame = 0
         all_frames = []
         while True:
-            ret, frame = cam.read()
+            ret, frame = cap.read()
             if ret:
                 is_success, buffer = cv2.imencode(".jpg", frame)
                 io_buf = io.BytesIO(buffer)
-                frame_file = NamedTemporaryFile(dir='.', delete=False)
-                while data := io_buf.read(1024):
-                    frame_file.write(data)
-                all_frames.append(frame_file)
-                currentframe += 1
-                print(currentframe)
+                frame_name = f'{file_hash}_frame{current_frame}.jpg'
+                async with aiofiles.open(frame_name, 'wb') as out_file:
+                    content = io_buf.read()
+                    await out_file.write(content)
+                frame_path = Path(frame_name).resolve()
+                print(frame_path)
+                print(frame_path.exists())
+                all_frames.append(frame_path)
+                current_frame += 1
             else:
                 break
-        return all_frames
+        return all_frames, width, height, fps
 
-    def get_predictions(self, frame_paths: List[str]) -> List[str]:
+    # можно извлечь координаты, вручную выделить объект
+    # и добавить информацию о скорости
+    # prediction.pandas() может пригодиться
+    def get_predictions(self, frame_paths: List[Path]) -> List[Path]:
         processed_frames_paths = []
         for frame_path in frame_paths:
             prediction: Detections = self.model(frame_path)
-            # prediction.pandas() может пригодиться
+            # save по умолчанию создает лишнюю папку
             prediction.save(exist_ok=True)
-            processed_frame_path = YOLO_DEFAULT_SAVE_PATH / f'{Path(frame_path).name}.jpg'
+            processed_frame_path = YOLO_DEFAULT_SAVE_PATH / frame_path.name
             print(str(processed_frame_path.resolve()))
-            processed_frames_paths.append(str(processed_frame_path.resolve()))
+            processed_frames_paths.append(processed_frame_path.resolve())
         return processed_frames_paths
 
-    def clear_files(self, files: List[Union[IO, IO[bytes]]]):
-        for f in files:
-            f.close()
-            os.unlink(f.name)
+    def clear_files(self, *paths: Path):
+        for path in paths:
+            path = path.resolve()
+            if path.exists():
+                path.unlink()
 
-    def create_tagged_video(self, frames: List[str], filename: str) -> Path:
-        video_name = f'{filename}.mp4'
+    def create_tagged_video(self, frames: List[str], width: int, height: int, fps: int, file_hash: int) -> Path:
+        video_name = f'{file_hash}_tagged.mp4'
         print(frames)
-        frame = cv2.imread(frames[0])
-        height, width, layers = frame.shape
-        # частоту кадров нужно доставать из исходного видео
-        video = cv2.VideoWriter(video_name, 0, 30, (width, height))  # 30 fps
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video = cv2.VideoWriter(video_name, fourcc, fps, (width, height))
         for frame in frames:
+            # imread не работает с Path
             video.write(cv2.imread(frame))
-        cv2.destroyAllWindows()
         video.release()
-        result_video_path = Path(video_name)
+        cv2.destroyAllWindows()
+        result_video_path = Path(video_name).resolve()
         print(result_video_path.exists())
         return result_video_path
 
-    # надо определиться когда удалять итоговый файл
-    def get_result(self, file_hash: int) -> (bool, Path):
-        return file_hash in self.store, self.store[file_hash].result_file_path
+    # надо определиться, когда удалять итоговый файл
+    def get_result(self, file_hash: int) -> (bool, VideoHandleTask):
+        return file_hash in self.store, self.store[file_hash]
 
+    # не понятно, как его корректно останавливать
     def stop(self):
         pass
