@@ -1,8 +1,7 @@
-BASE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+BASE_DIR := backend
 SRC_DIR = $(BASE_DIR)/backend
-VENV = $(BASE_DIR)/venv
-# Replace with your python dir e.g. /usr/local/bin
-PYTHON_DIR ?= /home/mzenkov/.local/bin
+# Replace with your python dir e.g. /home/mzenkov/.local/bin
+PYTHON_DIR ?= /home/runner/.local/bin
 CONFIG_FILE ?= pyproject.toml
 
 lint:
@@ -10,7 +9,7 @@ lint:
 	$(PYTHON_DIR)/pflake8 --jobs 4 --statistics --show-source $(SRC_DIR)
 	$(PYTHON_DIR)/pylint --jobs 4 --rcfile=$(CONFIG_FILE) $(SRC_DIR)
 	$(PYTHON_DIR)/mypy --config-file=$(CONFIG_FILE) $(SRC_DIR)
-	$(PYTHON_DIR)/bandit -r -ll --exclude $(VENV) $(SRC_DIR)
+	$(PYTHON_DIR)/bandit -r -ll $(SRC_DIR)
 
 format:
 	$(PYTHON_DIR)/isort $(SRC_DIR)
