@@ -1,13 +1,13 @@
+import logging
 from time import sleep
 
+import magic
+import requests
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-import requests
-import logging
 
 logging.basicConfig(level=logging.DEBUG)
-
-import magic
+logger = logging.getLogger(__name__)
 
 
 # add python-magic-bin to requirements.txt
@@ -25,6 +25,7 @@ def upload(uploaded_file: UploadedFile):
 
 
 def download(file_hash: int):
+    logger.debug(f'Downloading file {file_hash}')
     url = f'http://127.0.0.1:8000/download/{file_hash}'
     response = requests.get(url=url)
     if response.status_code == 200:
@@ -34,17 +35,15 @@ def download(file_hash: int):
 def wait_handling(file_hash: int):
     status = None
     with st.spinner('Пожалуйста подождите...'):
+        logger.debug('Waiting for a file to be ready')
         while True:
-            print('Waiting until file is ready')
             url = f'http://127.0.0.1:8000/status/{file_hash}'
             response = requests.get(url=url)
-            print(response.json())
             status = response.json().get('status')
             if status != "IN_PROGRESS":
                 break
             sleep(5)
     if status == 'FINISH':
-        print('Downloading the file...')
         download(file_hash)
 
 
@@ -55,13 +54,14 @@ if 'last_file_size' not in st.session_state:
 
 uploaded_file: UploadedFile = st.file_uploader(label='Загрузить видео')
 if uploaded_file is not None:
-    if st.session_state.last_file_name == uploaded_file.name \
-            and st.session_state.last_file_size == uploaded_file.size \
-            and 'last_file_hash' in st.session_state:
+    if (
+        st.session_state.last_file_name == uploaded_file.name
+        and st.session_state.last_file_size == uploaded_file.size
+        and 'last_file_hash' in st.session_state
+    ):
+        logger.debug('Getting already loaded file')
         wait_handling(st.session_state.last_file_hash)
     else:
         st.session_state.last_file_name = uploaded_file.name
         st.session_state.last_file_size = uploaded_file.size
         upload(uploaded_file)
-
-# streamlit run web/main.py
