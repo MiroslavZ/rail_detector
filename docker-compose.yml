@@ -1,0 +1,20 @@
+version: "3"
+
+services:
+  backend:
+    build: ./backend
+    container_name: backend
+    volumes:
+    - .:/code
+    ports:
+    - 8000:8000
+
+  web:
+    build: ./web
+    container_name: web
+    volumes:
+      - .:/code
+    ports:
+      - 8501:8501
+    depends_on:
+      - backend
