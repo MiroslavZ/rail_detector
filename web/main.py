@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-# python-magic-bin for windows
+from typing import Optional
 import magic
 import requests
 import streamlit as st
@@ -56,7 +56,7 @@ if 'last_file_name' not in st.session_state:
 if 'last_file_size' not in st.session_state:
     st.session_state.last_file_size = None
 
-uploaded_file: UploadedFile = st.file_uploader(label='Загрузить видео')
+uploaded_file: Optional[UploadedFile] = st.file_uploader(label='Загрузить видео')
 if uploaded_file is not None:
     if (
         st.session_state.last_file_name == uploaded_file.name
