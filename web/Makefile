@@ -1,6 +1,6 @@
 SRC_FILE = web/main.py
 # Replace with your python dir e.g. /home/mzenkov/.local/bin
-PYTHON_DIR ?= /home/mzenkov/.local/bin
+PYTHON_DIR ?= /home/runner/.local/bin
 CONFIG_FILE ?= pyproject.toml
 
 lint:
