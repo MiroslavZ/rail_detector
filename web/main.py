@@ -1,6 +1,7 @@
 import logging
 from time import sleep
 
+# python-magic-bin for windows
 import magic
 import requests
 import streamlit as st
@@ -8,6 +9,9 @@ from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+urllib3_logger = logging.getLogger('urllib3')
+urllib3_logger.setLevel(logging.CRITICAL)
+HOST = 'http://backend:8000'
 
 
 # add python-magic-bin to requirements.txt
@@ -16,7 +20,7 @@ def upload(uploaded_file: UploadedFile):
     mime = magic.Magic(mime=True)
     content_type = mime.from_buffer(bytes_data)
     files = {'uploaded_file': (uploaded_file.name, bytes_data, content_type)}
-    url = 'http://127.0.0.1:8000/upload'
+    url = f'{HOST}/upload'
     response = requests.post(url=url, files=files)
     if response.status_code == 200:
         file_hash = response.json().get('hash')
@@ -26,7 +30,7 @@ def upload(uploaded_file: UploadedFile):
 
 def download(file_hash: int):
     logger.debug(f'Downloading file {file_hash}')
-    url = f'http://127.0.0.1:8000/download/{file_hash}'
+    url = f'{HOST}/download/{file_hash}'
     response = requests.get(url=url)
     if response.status_code == 200:
         st.download_button(label='Скачать видео', data=response.content, file_name='video.mp4', mime='video/mp4')
@@ -37,7 +41,7 @@ def wait_handling(file_hash: int):
     with st.spinner('Пожалуйста подождите...'):
         logger.debug('Waiting for a file to be ready')
         while True:
-            url = f'http://127.0.0.1:8000/status/{file_hash}'
+            url = f'{HOST}/status/{file_hash}'
             response = requests.get(url=url)
             status = response.json().get('status')
             if status != "IN_PROGRESS":
