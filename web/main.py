@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-# python-magic-bin for windows
+from typing import Optional
 import magic
 import requests
 import streamlit as st
@@ -15,13 +15,13 @@ HOST = 'http://backend:8000'
 
 
 # add python-magic-bin to requirements.txt
-def upload(uploaded_file: UploadedFile):
-    bytes_data = uploaded_file.getvalue()
+def upload(file_to_upload: UploadedFile):
+    bytes_data = file_to_upload.getvalue()
     mime = magic.Magic(mime=True)
     content_type = mime.from_buffer(bytes_data)
-    files = {'uploaded_file': (uploaded_file.name, bytes_data, content_type)}
+    files = {'uploaded_file': (file_to_upload.name, bytes_data, content_type)}
     url = f'{HOST}/upload'
-    response = requests.post(url=url, files=files)
+    response = requests.post(url=url, files=files, timeout=30)
     if response.status_code == 200:
         file_hash = response.json().get('hash')
         st.session_state.last_file_hash = file_hash
@@ -29,9 +29,9 @@ def upload(uploaded_file: UploadedFile):
 
 
 def download(file_hash: int):
-    logger.debug(f'Downloading file {file_hash}')
+    logger.debug('Downloading file %s', file_hash)
     url = f'{HOST}/download/{file_hash}'
-    response = requests.get(url=url)
+    response = requests.get(url=url, timeout=30)
     if response.status_code == 200:
         st.download_button(label='Скачать видео', data=response.content, file_name='video.mp4', mime='video/mp4')
 
@@ -42,7 +42,7 @@ def wait_handling(file_hash: int):
         logger.debug('Waiting for a file to be ready')
         while True:
             url = f'{HOST}/status/{file_hash}'
-            response = requests.get(url=url)
+            response = requests.get(url=url, timeout=30)
             status = response.json().get('status')
             if status != "IN_PROGRESS":
                 break
@@ -56,7 +56,7 @@ if 'last_file_name' not in st.session_state:
 if 'last_file_size' not in st.session_state:
     st.session_state.last_file_size = None
 
-uploaded_file: UploadedFile = st.file_uploader(label='Загрузить видео')
+uploaded_file: Optional[UploadedFile] = st.file_uploader(label='Загрузить видео')
 if uploaded_file is not None:
     if (
         st.session_state.last_file_name == uploaded_file.name
