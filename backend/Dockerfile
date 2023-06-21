@@ -5,7 +5,11 @@ COPY ./requirements.txt /code/requirements.txt
 RUN pip install --upgrade pip
 RUN pip install -r /code/requirements.txt
 
-#RUN apt-get update && apt-get install ffmpeg libsm6 libxext6 libgl1  -y
+# lap не может нормально установиться
+# надо устанавливать из исходников
+# https://github.com/gatagat/lap/pull/46
+
+# для работы yolo
 RUN apt-get update && apt-get install libgl1  -y
 
 COPY backend /code/backend

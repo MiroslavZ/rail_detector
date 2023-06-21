@@ -16,15 +16,12 @@ async def upload_video(request: Request, uploaded_file: UploadFile = File(...)):
     handler: VideoHandler = request.app.state.video_handler
     print(uploaded_file.content_type)
     if uploaded_file.content_type != 'video/mp4':
-        print('Wrong format file sent')
         raise HTTPException(status_code=422, detail='Wrong format file sent')
     file_hash = hash(uploaded_file)
     async with aiofiles.open(f'{file_hash}.mp4', 'wb') as out_file:
         content = await uploaded_file.read()
         await out_file.write(content)
     file_path = Path(f'{file_hash}.mp4')
-    print(file_path)
-    print(file_path.exists())
     create_task(handler.start(file_path, file_hash))
     return {'hash': file_hash}
 
@@ -36,15 +33,15 @@ def get_status(file_hash: int, request: Request):
     return {'status': status}
 
 
-@router.get('/download/{file_hash}')
-def download_video(file_hash: int, request: Request):
+@router.get('/statistics/{file_hash}')
+def get_statistic(file_hash: int, request: Request):
     handler: VideoHandler = request.app.state.video_handler
-    task = handler.get_result(file_hash)
-    if task:
-        if task.task_status == TaskStatus.IN_PROGRESS:
-            raise HTTPException(status_code=503, detail='Final file is not ready yet')
-        if task.task_status == TaskStatus.ERROR:
-            raise HTTPException(status_code=502, detail='An error occurred while processing the file')
-        path = task.result_file_path
-        return FileResponse(path=path, filename=path.name, media_type='multipart/form-data')
-    raise HTTPException(status_code=404, detail='Item not found')
+    status, response = handler.get_result(file_hash)
+    if status == TaskStatus.IN_PROGRESS:
+        raise HTTPException(status_code=503, detail='Final file is not ready yet')
+    elif status == TaskStatus.ERROR:
+        raise HTTPException(status_code=502, detail='An error occurred while processing the file')
+    elif status == TaskStatus.NOT_RUNNING:
+        raise HTTPException(status_code=404, detail='Item not found')
+    else:
+        return response

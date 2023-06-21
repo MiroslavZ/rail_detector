@@ -1,19 +1,22 @@
 import asyncio
 import concurrent.futures
-import io
 from enum import Enum
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import List, Optional
+from typing import List, Tuple, Dict
+import logging
 
 import cv2
-import torch
+import numpy as np
 from PIL import ImageFile
-from ultralytics.nn.autoshape import Detections
+from ultralytics import YOLO
+from ultralytics.yolo.engine.results import Results
 
 from ..config import MODEL_PATH
+from ..utils.sort import Sort
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+logging.basicConfig(level='DEBUG')
+logger = logging.getLogger(__name__)
 
 
 class TaskStatus(Enum):
@@ -23,23 +26,43 @@ class TaskStatus(Enum):
     ERROR = 'ERROR'
 
 
+class RailMount:
+    def __init__(self, box: Tuple, mount_number: int = 0, current_speed: float = 0.0, current_distance: float = 0.0):
+        self.box = box
+        self.mount_number = mount_number
+        self.current_speed = current_speed
+        self.current_distance = current_distance
+
+
+class Statistics:
+    def __init__(self, total_distance: float = 0, avg_speed: float = 0, ride_time: float = 0, mounts_count: int = 0,
+                 mounts_dict: Dict[Results, List[RailMount]] = None):
+        self.total_distance = total_distance
+        self.avg_speed = avg_speed
+        self.ride_time = ride_time
+        self.mounts_count = mounts_count
+        # кадр видео => прогноз модели => одно/несколько креплений
+        if mounts_dict:
+            self.mounts_dict = mounts_dict
+        else:
+            self.mounts_dict = {}
+
+
 class VideoHandleTask:
-    def __init__(self, task_status: TaskStatus = TaskStatus.IN_PROGRESS, result_file_path: Path = None):  # type: ignore
+    def __init__(self, task_status: TaskStatus = TaskStatus.IN_PROGRESS,
+                 generated_statistics: Statistics = None):
         self.task_status = task_status
-        self.result_file_path = result_file_path
-
-
-class VideoParams:
-    def __init__(self, width: int, height: int, fps: int):
-        self.width = width
-        self.height = height
-        self.fps = fps
+        self.generated_statistics = generated_statistics
 
 
 class VideoHandler:
     def __init__(self):
-        self.store = {}
-        self.model = torch.hub.load('ultralytics/yolov5', 'custom', MODEL_PATH)
+        self.store: Dict[int, VideoHandleTask] = {}
+        if MODEL_PATH.exists():
+            self.model = YOLO(MODEL_PATH)
+        else:
+            logger.error('Weights for model not found')
+            raise FileNotFoundError
 
     def get_status(self, file_hash: int) -> TaskStatus:
         if file_hash in self.store:
@@ -53,75 +76,91 @@ class VideoHandler:
             try:
                 task = await loop.run_in_executor(pool, self.handle_file, file_path, file_hash)
                 self.store[file_hash] = task
-            except Exception:  # pylint: disable=W0718
+            except Exception as err:
+                logger.error(err)
                 self.store[file_hash].task_status = TaskStatus.ERROR
 
     def handle_file(self, file_path: Path, file_hash: int) -> VideoHandleTask:
-        task = VideoHandleTask(TaskStatus.IN_PROGRESS)
-        all_frames, params = self.cut_file(str(file_path.resolve()))
-        all_frames_paths = [Path(frame) for frame in all_frames]
-        processed_frames_paths = self.get_predictions(all_frames_paths)
-        str_processed_frames_paths = [str(path.resolve()) for path in processed_frames_paths]
-        task.result_file_path = self.create_tagged_video(str_processed_frames_paths, params, file_hash)
-        self.clear_files(*[file_path, *all_frames_paths, *processed_frames_paths])
+        task = VideoHandleTask()
+        logger.debug('Getting predictions for each frame...')
+        predictions = self.get_predictions(file_path)
+        logger.debug('Handling predictions, calculating mounts...')
+        mounts_count, mounts_dict = self.calc_mounts(predictions)
+        logger.debug('Getting predictions for each frame...')
+        distance = self.calc_distance(mounts_count)
+        logger.debug('Getting video durations for future calculations...')
+        ride_time = self.get_video_duration_seconds(str(file_path))
+        average_speed = distance / ride_time
+        logger.debug('Saving statistics for %s', file_hash)
+        task.generated_statistics = Statistics(distance, average_speed, ride_time, mounts_count)
+        logger.debug('Cleaning temporary files')
+        self.clear_files(file_path)
         task.task_status = TaskStatus.FINISH
         return task
 
-    def cut_file(self, path: str) -> tuple[List[str], VideoParams]:
-        cap = cv2.VideoCapture(path)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        current_frame = 0
-        all_frames = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            is_success, buffer = cv2.imencode('.jpg', frame)
-            if is_success:
-                io_buf = io.BytesIO(buffer)
-                frame_file = NamedTemporaryFile(dir='.', delete=False)  # pylint: disable=R1732
-                while data := io_buf.read():
-                    frame_file.write(data)
-                frame_file.close()
-                all_frames.append(frame_file.name)
-                current_frame += 1
-        return all_frames, VideoParams(width, height, fps)
+    def get_predictions(self, file_path: Path) -> List[Results]:
+        predictions: List[Results] = self.model(file_path, stream=True)
+        return predictions
 
-    # можно извлечь координаты, вручную выделить объект
-    # и добавить информацию о скорости
-    # prediction.pandas() может пригодиться
-    def get_predictions(self, frame_paths: List[Path]) -> List[Path]:
-        processed_frames_paths = []
-        for frame_path in frame_paths:
-            prediction: Detections = self.model(frame_path)
-            # save по умолчанию создает лишнюю папку
-            prediction.save(exist_ok=True, save_dir='.')
-            processed_frame_path = Path(f'{frame_path.name}.jpg')
-            processed_frames_paths.append(processed_frame_path)
-        return processed_frames_paths
+    def calc_mounts(self, predictions: List[Results]) -> Tuple[int, Dict[Results, List[RailMount]]]:
+        mounts_count = 0
+        tracker = Sort()
+        mounts_dict = {}
+        for result in predictions:
+            if result.boxes:
+                count = 0
+                detects = np.zeros((len(result.boxes), 5))
+                for box in result.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0]
+                    c = int(box.cls)
+                    box = np.array([x1, y1, x2, y2, c])
+                    detects[count, :] = box[:]
+                    count += 1
+                    if result not in mounts_dict:
+                        mounts_dict[result] = []
+                    mounts_dict[result].append(RailMount((x1, y1, x2, y2, c)))
+                if len(detects) != 0:
+                    trackers = tracker.update(detects)
+                    if trackers.any():
+                        logger.debug(trackers)
+                        for mount, tr in zip(mounts_dict[result], trackers):
+                            mount.mount_number = tr[-1]
+            else:
+                logger.debug('No mounts detected')
+                mounts_dict[result] = []
+                tracker.update(np.empty((0, 5)))
+        return mounts_count, mounts_dict
+
+    def calc_distance(self, mounts_count) -> float:
+        # расстояние между креплениями 0,42м
+        return (mounts_count-1) * 0.42 if (mounts_count-1) * 0.42 >= 0 else 0.0
+
+    def get_video_duration_seconds(self, file_path: str):
+        cap = cv2.VideoCapture(file_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        return frame_count / fps
 
     def clear_files(self, *paths: Path):
         for path in paths:
             if path.exists():
                 path.unlink()
 
-    def create_tagged_video(self, frames: List[str], params: VideoParams, file_hash: int) -> Path:
-        video_name = f'{file_hash}_tagged.mp4'
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video = cv2.VideoWriter(video_name, fourcc, params.fps, (params.width, params.height))
-        for frame in frames:
-            # imread не работает с Path
-            video.write(cv2.imread(frame))
-        video.release()
-        cv2.destroyAllWindows()
-        result_video_path = Path(video_name).resolve()
-        return result_video_path
-
-    # надо определиться, когда удалять итоговый файл
-    def get_result(self, file_hash: int) -> Optional[VideoHandleTask]:
-        return self.store.get(file_hash)
+    def get_result(self, file_hash: int) -> Tuple[TaskStatus, Dict]:
+        if file_hash in self.store:
+            status = self.store[file_hash].task_status
+            if status == TaskStatus.FINISH:
+                statistics = self.store[file_hash].generated_statistics
+                # объекты предсказаний yolo нужно сериализовать через Results.tojson()
+                response = {
+                    'total_distance': statistics.total_distance,
+                    'avg_speed': statistics.avg_speed,
+                    'ride_time': statistics.ride_time,
+                    'mounts_count': statistics.mounts_count
+                }
+                return status, response
+            return status, {}
+        return TaskStatus.NOT_RUNNING, {}
 
     # не понятно, как его корректно останавливать
     def stop(self):
