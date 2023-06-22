@@ -1,4 +1,4 @@
-FROM ultralytics/yolov5:latest
+FROM python:3.10
 
 COPY ./requirements.txt /code/requirements.txt
 
@@ -6,13 +6,14 @@ RUN pip install --upgrade pip
 RUN pip install -r /code/requirements.txt
 
 # lap не может нормально установиться
-# надо устанавливать из исходников
+# а фикс установки еще не принят
 # https://github.com/gatagat/lap/pull/46
+RUN pip install -e git+https://github.com/DeGirum/lap.git#egg=lap
 
 # для работы yolo
 RUN apt-get update && apt-get install libgl1  -y
 
-COPY backend /code/backend
+COPY backend /code
 
 WORKDIR /code
 

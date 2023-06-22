@@ -14,7 +14,6 @@ UPLOADED_FILE_PATH = ''
 @router.post('/upload')
 async def upload_video(request: Request, uploaded_file: UploadFile = File(...)):
     handler: VideoHandler = request.app.state.video_handler
-    print(uploaded_file.content_type)
     if uploaded_file.content_type != 'video/mp4':
         raise HTTPException(status_code=422, detail='Wrong format file sent')
     file_hash = hash(uploaded_file)

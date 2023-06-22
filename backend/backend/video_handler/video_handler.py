@@ -99,7 +99,7 @@ class VideoHandler:
         return task
 
     def get_predictions(self, file_path: Path) -> List[Results]:
-        predictions: List[Results] = self.model(file_path, stream=True)
+        predictions: List[Results] = self.model(file_path)
         return predictions
 
     def calc_mounts(self, predictions: List[Results]) -> Tuple[int, Dict[Results, List[RailMount]]]:
@@ -125,6 +125,8 @@ class VideoHandler:
                         logger.debug(trackers)
                         for mount, tr in zip(mounts_dict[result], trackers):
                             mount.mount_number = tr[-1]
+                            if tr[-1] > mounts_count:
+                                mounts_count = tr[-1]
             else:
                 logger.debug('No mounts detected')
                 mounts_dict[result] = []

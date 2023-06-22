@@ -28,6 +28,15 @@ def upload(file_to_upload: UploadedFile):
         wait_handling(file_hash)
 
 
+def get_statistics(file_hash: int):
+    logger.debug('Getting statistics for %s', file_hash)
+    url = f'{HOST}/statistics/{file_hash}'
+    response = requests.get(url=url, timeout=30)
+    if response.status_code == 200:
+        result = response.json()
+        st.write(result)
+
+
 def download(file_hash: int):
     logger.debug('Downloading file %s', file_hash)
     url = f'{HOST}/download/{file_hash}'
