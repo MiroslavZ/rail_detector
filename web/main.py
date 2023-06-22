@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-from typing import Optional
+from typing import Optional, Dict
 import magic
 import requests
 import streamlit as st
@@ -33,16 +33,11 @@ def get_statistics(file_hash: int):
     url = f'{HOST}/statistics/{file_hash}'
     response = requests.get(url=url, timeout=30)
     if response.status_code == 200:
-        result = response.json()
-        st.write(result)
-
-
-def download(file_hash: int):
-    logger.debug('Downloading file %s', file_hash)
-    url = f'{HOST}/download/{file_hash}'
-    response = requests.get(url=url, timeout=30)
-    if response.status_code == 200:
-        st.download_button(label='Скачать видео', data=response.content, file_name='video.mp4', mime='video/mp4')
+        result: Dict = response.json()
+        st.write('Пройденная дистанция {} м'.format(result.get("total_distance")))
+        st.write('Средняя скорость {:.2} м/с'.format(result.get("avg_speed")))
+        st.write('Время {:.2} с'.format(result.get("ride_time")))
+        st.write('Количество креплений {} шт.'.format(result.get("mounts_count")))
 
 
 def wait_handling(file_hash: int):
@@ -57,7 +52,7 @@ def wait_handling(file_hash: int):
                 break
             sleep(5)
     if status == 'FINISH':
-        download(file_hash)
+        get_statistics(file_hash)
 
 
 if 'last_file_name' not in st.session_state:
