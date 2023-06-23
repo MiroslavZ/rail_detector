@@ -33,9 +33,23 @@ def get_status(file_hash: int, request: Request):
 
 
 @router.get('/statistics/{file_hash}')
-def get_statistic(file_hash: int, request: Request):
+def get_statistics(file_hash: int, request: Request):
     handler: VideoHandler = request.app.state.video_handler
-    status, response = handler.get_result(file_hash)
+    status, response = handler.get_statistics(file_hash)
+    if status == TaskStatus.IN_PROGRESS:
+        raise HTTPException(status_code=503, detail='Statistics not calculated yet')
+    elif status == TaskStatus.ERROR:
+        raise HTTPException(status_code=502, detail='An error occurred while processing the file')
+    elif status == TaskStatus.NOT_RUNNING:
+        raise HTTPException(status_code=404, detail='Item not found')
+    else:
+        return response
+
+
+@router.get('/video/{file_hash}')
+def get_tagged_video(file_hash: int, request: Request):
+    handler: VideoHandler = request.app.state.video_handler
+    status, path = handler.get_tagged_video(file_hash)
     if status == TaskStatus.IN_PROGRESS:
         raise HTTPException(status_code=503, detail='Final file is not ready yet')
     elif status == TaskStatus.ERROR:
@@ -43,4 +57,4 @@ def get_statistic(file_hash: int, request: Request):
     elif status == TaskStatus.NOT_RUNNING:
         raise HTTPException(status_code=404, detail='Item not found')
     else:
-        return response
+        return FileResponse(path=path, filename=path.name, media_type='multipart/form-data')
