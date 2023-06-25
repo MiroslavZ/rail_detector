@@ -35,8 +35,8 @@ def get_statistics(file_hash: int):
     if response.status_code == 200:
         result: Dict = response.json()
         st.write('Пройденная дистанция {} м'.format(result.get("total_distance")))
-        st.write('Средняя скорость {:.2} м/с'.format(result.get("avg_speed")))
-        st.write('Время {:.2} с'.format(result.get("ride_time")))
+        st.write('Средняя скорость {} м/с'.format(result.get("avg_speed")))
+        st.write('Время {} с'.format(result.get("ride_time")))
         st.write('Количество креплений {} шт.'.format(result.get("mounts_count")))
 
 

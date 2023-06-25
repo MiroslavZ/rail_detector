@@ -34,6 +34,10 @@ class RailMount:
         self.current_speed = current_speed
         self.current_distance = current_distance
 
+    def __str__(self):
+        return 'RailMount number {}, {}, distance = {}, speed = {}'.format(self.mount_number, self.box,
+                                                                           self.current_distance, self.current_speed)
+
 
 class Statistics:
     def __init__(self, total_distance: float = 0, avg_speed: float = 0, ride_time: float = 0, mounts_count: int = 0,
@@ -60,11 +64,7 @@ class VideoHandleTask:
 class VideoHandler:
     def __init__(self):
         self.store: Dict[int, VideoHandleTask] = {}
-        if MODEL_PATH.exists():
-            self.model = YOLO(MODEL_PATH)
-        else:
-            logger.error('Weights for model not found')
-            raise FileNotFoundError
+        self.model = YOLO(MODEL_PATH)
 
     def get_status(self, file_hash: int) -> TaskStatus:
         if file_hash in self.store:
@@ -90,8 +90,8 @@ class VideoHandler:
         mounts_count, mounts_dict = self.calc_mounts(predictions)
         logger.debug('Getting predictions for each frame...')
         distance = self.calc_distance(mounts_count)
-        logger.debug('Getting video durations for future calculations...')
-        ride_time = self.get_video_duration_seconds(str(file_path))
+        logger.debug('Calculate ride time...')
+        ride_time = self.calc_ride_time(str(file_path), mounts_dict)
         average_speed = distance / ride_time
         logger.debug('Saving statistics for %s', file_hash)
         task.generated_statistics = Statistics(distance, average_speed, ride_time, mounts_count, mounts_dict)
@@ -135,9 +135,8 @@ class VideoHandler:
                 if len(detects) != 0:
                     trackers = tracker.update(detects)
                     if trackers.any():
-                        logger.debug(trackers)
                         for mount, tr in zip(mounts_dict[result], trackers):
-                            mount.mount_number = tr[-1]
+                            mount.mount_number = int(tr[-1])
                             if tr[-1] > mounts_count:
                                 mounts_count = tr[-1]
             else:
@@ -147,15 +146,35 @@ class VideoHandler:
         logger.debug('detected {} mounts, generated {} predictions'.format(mounts_count, len(mounts_dict.keys())))
         return mounts_count, mounts_dict
 
-    def calc_distance(self, mounts_count) -> float:
+    def calc_distance(self, mounts_count: int) -> float:
         # расстояние между креплениями 0,42м
-        return (mounts_count - 1) * 0.42 if (mounts_count - 1) * 0.42 >= 0 else 0.0
+        return round((mounts_count - 1) * 0.42, 2) if (mounts_count - 1) * 0.42 >= 0 else 0.0
 
-    def get_video_duration_seconds(self, file_path: str):
+    def calc_ride_time(self, file_path: str, mounts_dict: OrderedDict[Results, List[RailMount]]) -> float:
         cap = cv2.VideoCapture(file_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        return frame_count / fps
+        start_frame_index = self.detect_movement_or_stop(mounts_dict)
+        stop_frame_index = frame_count - self.detect_movement_or_stop(mounts_dict, calc_from_start=False)
+        logger.debug('Start frame index is {}, stop frame index is {}'.format(start_frame_index, stop_frame_index))
+        return (stop_frame_index - start_frame_index)/fps
+
+    def coordinates_is_differ(self, box1: Tuple, box2: Tuple):
+        diffs = tuple(map(lambda i, j: abs(i - j), box1, box2))
+        out_of_bounds = [diff for diff in diffs if diff > 1]
+        return len(out_of_bounds) > 2
+
+    def detect_movement_or_stop(self, mounts_dict: OrderedDict[Results, List[RailMount]], calc_from_start: bool = True):
+        previous_mount = None
+        collection_to_iterate = mounts_dict.keys() if calc_from_start else list(mounts_dict.keys())[::-1]
+        for index, key in enumerate(collection_to_iterate, start=1):
+            mounts_list = mounts_dict[key]
+            for mount in mounts_list:
+                if previous_mount:
+                    if self.coordinates_is_differ(previous_mount.box, mount.box):
+                        return index
+                else:
+                    previous_mount = mount
 
     def calc_intermediate_distances(self, statistics: Statistics):
         for mounts_list in statistics.mounts_dict.values():
@@ -163,11 +182,7 @@ class VideoHandler:
                 mount.current_distance = self.calc_distance(mount.mount_number)
 
     def calc_intermediate_speed(self, statistics: Statistics):
-        # не понятно, какое крепление считается "предыдущим"
-        # а если крепления оба обнаружены впервые на одном кадре?
-        # как с текущей организацией данных считать время?
-        for index, mounts_list in enumerate(statistics.mounts_dict.values()):
-            pass
+        pass
 
     def create_tagged_video(self, file_path: str, file_hash: int, statistics: Statistics) -> Path:
         cap = cv2.VideoCapture(file_path)
@@ -187,30 +202,27 @@ class VideoHandler:
                 logger.debug('Unable to read frame {}, maybe the video is over'.format(frame_index))
                 break
             draw = frame.copy()
+            logger.debug('Prediction number {}'.format(frame_index))
             for mount in mounts_list:
+                logger.debug(mount)
                 x_start, y_start, x_end, y_end = mount.box
                 color = (52, 250, 66)
-                fontScale = 1
+                font_scale = 1
                 thickness = 2
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 text_coordinates = self.get_right_text_coordinates(x_start, y_start, width, height)
                 number = mount.mount_number
                 distance = mount.current_distance
-                text = '{} S={}'.format(number, distance)
-                logger.debug(text_coordinates)
-                draw = cv2.putText(draw, text, text_coordinates, font, fontScale, color, thickness)
-                # image = cv2.putText(image, 'OpenCV', org, font, fontScale, color, thickness, cv2.LINE_AA)
+                text = '{:.0f} S={:.2f}'.format(number, distance)
+                draw = cv2.putText(draw, text, text_coordinates, font, font_scale, color, thickness)
                 draw = cv2.rectangle(draw, (x_start, y_start), (x_end, y_end), color, thickness)
                 video.write(draw)
             frame_index += 1
         video.release()
-        # а нужно ли оно здесь? мы же без интерфейса работаем
         cv2.destroyAllWindows()
         result_video_path = Path(video_name).resolve()
         return result_video_path
 
-    # в идеале при размещении информации нужно учитывать границы изображения
-    # и определять оптимальное место куда поместить текст
     def get_right_text_coordinates(self, x: int, y: int, width: int, height: int) -> Tuple[int, int]:
         return x, y - 5
 
@@ -224,19 +236,17 @@ class VideoHandler:
             status = self.store[file_hash].task_status
             if status == TaskStatus.FINISH:
                 statistics = self.store[file_hash].generated_statistics
-                # объекты предсказаний yolo нужно сериализовать через Results.tojson()
                 response = {
                     'total_distance': statistics.total_distance,
-                    'avg_speed': statistics.avg_speed,
-                    'ride_time': statistics.ride_time,
-                    'mounts_count': statistics.mounts_count
+                    'avg_speed': round(statistics.avg_speed, 2),
+                    'ride_time': round(statistics.ride_time, 2),
+                    'mounts_count': int(statistics.mounts_count)
                 }
                 return status, response
             return status, {}
         return TaskStatus.NOT_RUNNING, {}
 
     def get_tagged_video(self, file_hash: int) -> Tuple[TaskStatus, Optional[Path]]:
-        # похоже на копипаст с get_statistics
         if file_hash in self.store:
             status = self.store[file_hash].task_status
             if status == TaskStatus.FINISH:
@@ -244,6 +254,5 @@ class VideoHandler:
             return status, None
         return TaskStatus.NOT_RUNNING, None
 
-    # не понятно, как его корректно останавливать
     def stop(self):
         pass
