@@ -97,8 +97,6 @@ class VideoHandler:
         task.generated_statistics = Statistics(distance, average_speed, ride_time, mounts_count, mounts_dict)
         logger.debug('Calculating of intermediate distance for each mount...')
         self.calc_intermediate_distances(task.generated_statistics)
-        # logger.debug('Calculating of intermediate speed for each mount...')
-        # расчет промежуточных скоростей для каждого крепления
         logger.debug('Creating tagged video...')
         result_video_path = self.create_tagged_video(str(file_path), file_hash, task.generated_statistics)
         task.result_file_path = result_video_path
