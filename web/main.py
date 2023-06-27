@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 urllib3_logger = logging.getLogger('urllib3')
 urllib3_logger.setLevel(logging.CRITICAL)
-HOST = 'http://127.0.0.1:8000'
+HOST = 'http://backend:8000'
 
 
 # add python-magic-bin to requirements.txt
