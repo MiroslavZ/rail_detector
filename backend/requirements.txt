@@ -1,3 +1,5 @@
+filterpy==1.4.5
+scikit-image==0.21.0
 aiofiles==23.1.0
 anyio==3.6.2
 certifi==2023.5.7

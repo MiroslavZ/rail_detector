@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-from typing import Optional
+from typing import Optional, Dict
 import magic
 import requests
 import streamlit as st
@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 urllib3_logger = logging.getLogger('urllib3')
 urllib3_logger.setLevel(logging.CRITICAL)
-HOST = 'http://backend:8000'
+HOST = 'http://127.0.0.1:8000'
 
 
 # add python-magic-bin to requirements.txt
@@ -30,10 +30,23 @@ def upload(file_to_upload: UploadedFile):
 
 def download(file_hash: int):
     logger.debug('Downloading file %s', file_hash)
-    url = f'{HOST}/download/{file_hash}'
+    url = f'{HOST}/video/{file_hash}'
     response = requests.get(url=url, timeout=30)
     if response.status_code == 200:
         st.download_button(label='Скачать видео', data=response.content, file_name='video.mp4', mime='video/mp4')
+
+
+def get_statistics(file_hash: int):
+    logger.debug('Getting statistics for %s', file_hash)
+    url = f'{HOST}/statistics/{file_hash}'
+    response = requests.get(url=url, timeout=30)
+    if response.status_code == 200:
+        result: Dict = response.json()
+        st.write('Пройденная дистанция {} м'.format(result.get("total_distance")))
+        st.write('Средняя скорость {} м/с'.format(result.get("avg_speed")))
+        st.write('Время {} с'.format(result.get("ride_time")))
+        st.write('Количество креплений {} шт.'.format(result.get("mounts_count")))
+    download(file_hash)
 
 
 def wait_handling(file_hash: int):
@@ -48,7 +61,7 @@ def wait_handling(file_hash: int):
                 break
             sleep(5)
     if status == 'FINISH':
-        download(file_hash)
+        get_statistics(file_hash)
 
 
 if 'last_file_name' not in st.session_state:

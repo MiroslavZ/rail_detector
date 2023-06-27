@@ -1,17 +1,25 @@
-FROM ultralytics/yolov5:latest
+FROM python:3.11 as stage0
 
-COPY ./requirements.txt /code/requirements.txt
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-RUN pip install --upgrade pip
-RUN pip install -r /code/requirements.txt
-
-#RUN apt-get update && apt-get install ffmpeg libsm6 libxext6 libgl1  -y
 RUN apt-get update && apt-get install libgl1  -y
 
-COPY backend /code/backend
+FROM stage0 as stage1
 
-WORKDIR /code
+COPY requirements.txt /python_requirements/requirements.txt
 
-EXPOSE 8000
+RUN pip install --no-cache-dir --upgrade -r /python_requirements/requirements.txt
+# lap не может нормально установиться ,а фикс установки еще не принят
+# https://github.com/gatagat/lap/pull/46
+RUN pip install -e git+https://github.com/DeGirum/lap.git#egg=lap
 
-CMD ["uvicorn","backend.backend.main:app","--host","0.0.0.0","--port","8000"]
+ENV ROOT_DIR /app
+
+WORKDIR $ROOT_DIR
+
+COPY backend $ROOT_DIR/backend
+
+FROM stage1 as final
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

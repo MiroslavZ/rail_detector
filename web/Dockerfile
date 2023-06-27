@@ -1,15 +1,21 @@
-FROM python:3.10
+FROM python:3.11 as stage0
 
-COPY ./requirements.txt /code/requirements.txt
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-RUN pip install --upgrade pip
-RUN pip install -r /code/requirements.txt
+FROM stage0 as stage1
 
-COPY . /code/web
+COPY requirements.txt /python_requirements/requirements.txt
 
-WORKDIR /code
+RUN pip install --no-cache-dir --upgrade -r /python_requirements/requirements.txt
 
-EXPOSE 8501
+ENV ROOT_DIR /app
+
+WORKDIR $ROOT_DIR
+
+COPY . $ROOT_DIR
+
+FROM stage1 as final
 
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
-CMD ["streamlit", "run", "web/main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
