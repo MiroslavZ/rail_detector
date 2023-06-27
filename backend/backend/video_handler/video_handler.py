@@ -1,10 +1,10 @@
 import asyncio
 import concurrent.futures
+import logging
 from collections import OrderedDict
 from enum import Enum
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
-import logging
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -35,13 +35,20 @@ class RailMount:
         self.current_distance = current_distance
 
     def __str__(self):
-        return 'RailMount number {}, {}, distance = {}, speed = {}'.format(self.mount_number, self.box,
-                                                                           self.current_distance, self.current_speed)
+        return 'RailMount number {}, {}, distance = {}, speed = {}'.format(
+            self.mount_number, self.box, self.current_distance, self.current_speed
+        )
 
 
 class Statistics:
-    def __init__(self, total_distance: float = 0, avg_speed: float = 0, ride_time: float = 0, mounts_count: int = 0,
-                 mounts_dict: OrderedDict[Results, List[RailMount]] = None):
+    def __init__(
+            self,
+            total_distance: float = 0,
+            avg_speed: float = 0,
+            ride_time: float = 0,
+            mounts_count: int = 0,
+            mounts_dict: OrderedDict[Results, List[RailMount]] = None,
+    ):
         self.total_distance = total_distance
         self.avg_speed = avg_speed
         self.ride_time = ride_time
@@ -54,8 +61,12 @@ class Statistics:
 
 
 class VideoHandleTask:
-    def __init__(self, task_status: TaskStatus = TaskStatus.IN_PROGRESS,
-                 generated_statistics: Statistics = None, result_file_path: Path = None):
+    def __init__(
+            self,
+            task_status: TaskStatus = TaskStatus.IN_PROGRESS,
+            generated_statistics: Statistics = None,
+            result_file_path: Path = None,
+    ):
         self.task_status = task_status
         self.generated_statistics = generated_statistics
         self.result_file_path = result_file_path
@@ -88,7 +99,10 @@ class VideoHandler:
         predictions = self.get_predictions(file_path)
         logger.debug('Handling predictions, calculating mounts...')
         mounts_count, mounts_dict = self.calc_mounts(predictions)
-        logger.debug('Getting predictions for each frame...')
+        logger.debug('Correction of the number of rail mounts...')
+        corrected_mounts_count = self.adjust_mounts_count(mounts_dict)
+        logger.debug('Calculated mounts count {}, after correction {}'.format(mounts_count, corrected_mounts_count))
+        mounts_count = corrected_mounts_count
         distance = self.calc_distance(mounts_count)
         logger.debug('Calculate ride time...')
         ride_time = self.calc_ride_time(str(file_path), mounts_dict)
@@ -114,6 +128,7 @@ class VideoHandler:
         mounts_count = 0
         tracker = Sort()
         mounts_dict = OrderedDict()
+        prediction_number = 1
         for result in predictions:
             if result.boxes:
                 count = 0
@@ -133,6 +148,7 @@ class VideoHandler:
                 if len(detects) != 0:
                     trackers = tracker.update(detects)
                     if trackers.any():
+                        #logger.debug('Prediction number {}, trackers {}'.format(prediction_number, trackers))
                         for mount, tr in zip(mounts_dict[result], trackers):
                             mount.mount_number = int(tr[-1])
                             if tr[-1] > mounts_count:
@@ -141,8 +157,36 @@ class VideoHandler:
                 logger.debug('No mounts detected')
                 mounts_dict[result] = []
                 tracker.update(np.empty((0, 5)))
+            prediction_number += 1
         logger.debug('detected {} mounts, generated {} predictions'.format(mounts_count, len(mounts_dict.keys())))
         return mounts_count, mounts_dict
+
+    def adjust_mounts_count(self, mounts_dict: OrderedDict[Results, List[RailMount]]) -> int:
+        prev_mount_number_before_corr = 0
+        prev_mount_number_after_corr = 0
+        error_detected = False
+        prev_mount = None
+        for mounts_list in mounts_dict.values():
+            for mount in mounts_list:
+                temp = mount.mount_number
+                if mount.mount_number == 0:
+                    error_detected = True
+                    if prev_mount_number_before_corr == 0 \
+                            or not self.coordinates_is_differ(mount.box, prev_mount.box, 7, 3):
+                        prev_mount_number_after_corr = mount.mount_number = prev_mount.mount_number
+                    else:
+                        prev_mount_number_after_corr = mount.mount_number = prev_mount.mount_number + 1
+                elif error_detected:
+                    if prev_mount_number_before_corr == 0 or prev_mount_number_before_corr == mount.mount_number \
+                            or not self.coordinates_is_differ(mount.box, prev_mount.box, 7, 3):
+                        prev_mount_number_after_corr = mount.mount_number = prev_mount.mount_number
+                    else:
+                        prev_mount_number_after_corr = mount.mount_number = prev_mount.mount_number + 1
+                else:
+                    prev_mount_number_after_corr = mount.mount_number
+                prev_mount_number_before_corr = temp
+                prev_mount = mount
+        return prev_mount.mount_number
 
     def calc_distance(self, mounts_count: int) -> float:
         # расстояние между креплениями 0,42м
@@ -155,12 +199,12 @@ class VideoHandler:
         start_frame_index = self.detect_movement_or_stop(mounts_dict)
         stop_frame_index = frame_count - self.detect_movement_or_stop(mounts_dict, calc_from_start=False)
         logger.debug('Start frame index is {}, stop frame index is {}'.format(start_frame_index, stop_frame_index))
-        return (stop_frame_index - start_frame_index)/fps
+        return (stop_frame_index - start_frame_index) / fps
 
-    def coordinates_is_differ(self, box1: Tuple, box2: Tuple):
+    def coordinates_is_differ(self, box1: Tuple, box2: Tuple, limit: int = 1, out_of_bounds_count: int = 2):
         diffs = tuple(map(lambda i, j: abs(i - j), box1, box2))
-        out_of_bounds = [diff for diff in diffs if diff > 1]
-        return len(out_of_bounds) > 2
+        out_of_bounds = [diff for diff in diffs if diff > limit]
+        return len(out_of_bounds) > out_of_bounds_count
 
     def detect_movement_or_stop(self, mounts_dict: OrderedDict[Results, List[RailMount]], calc_from_start: bool = True):
         previous_mount = None
@@ -192,7 +236,7 @@ class VideoHandler:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video = cv2.VideoWriter(video_name, fourcc, fps, (width, height))
         # количество кадров совпадает с количеством прогнозов
-        frame_index = 0
+        frame_index = 1
         for prediction in statistics.mounts_dict.keys():
             mounts_list = statistics.mounts_dict[prediction]
             ret, frame = cap.read()
@@ -238,7 +282,7 @@ class VideoHandler:
                     'total_distance': statistics.total_distance,
                     'avg_speed': round(statistics.avg_speed, 2),
                     'ride_time': round(statistics.ride_time, 2),
-                    'mounts_count': int(statistics.mounts_count)
+                    'mounts_count': int(statistics.mounts_count),
                 }
                 return status, response
             return status, {}
